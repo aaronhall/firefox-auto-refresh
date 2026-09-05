@@ -15,7 +15,16 @@
 // Second-precision via setTimeout + tabs.reload (alarms clamp to >= 30s,
 // so they're intentionally not used). Timers live in memory and die with
 // the tab / browser session — nothing is persisted.
-const api = globalThis.browser ?? chrome;
+const api = globalThis.browser ?? globalThis.chrome;
+
+// Upper bound keeps intervals well below the setTimeout 2^31-1 ms
+// overflow (~24.8 days) and avoids accidental reload loops from huge input.
+const MAX_INTERVAL_SECS = 86400; // 24h
+
+// Auto-cancel notices expire so the map can't grow without bound when the
+// popup is never reopened for a tab.
+const RECENT_CANCEL_TTL_MS = 10 * 60 * 1000;
+const RECENT_CANCEL_MAX = 50;
 
 // tabId -> { timeoutId, seconds, scope, pageKey, host }
 const timers = new Map();
@@ -26,21 +35,18 @@ const recentCancels = new Map();
 const ICON_IDLE = { 48: "icons/icon-48-gray.svg", 96: "icons/icon-96-gray.svg" };
 const ICON_ACTIVE = { 48: "icons/icon-48.svg", 96: "icons/icon-96.svg" };
 
-const IGNORED_SCHEMES = [
-  "about:",
-  "moz-extension:",
-  "chrome:",
-  "edge:",
-  "view-source:",
-  "data:",
-  "file:",
-];
+function isValidTabId(tabId) {
+  return Number.isInteger(tabId) && tabId > 0;
+}
 
+// Allowlist: only http(s) pages can be auto-refreshed. Everything else
+// (about:, moz-extension:, chrome:, view-source:, data:, file:, blob:, …)
+// is rejected. Denylists drift; an allowlist fails closed.
 function isRefreshableUrl(url) {
-  if (!url) return false;
+  if (!url || typeof url !== "string") return false;
   try {
     const u = new URL(url);
-    return !IGNORED_SCHEMES.some((s) => u.protocol === s || url.startsWith(s));
+    return u.protocol === "http:" || u.protocol === "https:";
   } catch {
     return false;
   }
@@ -72,11 +78,30 @@ function badgeText(seconds) {
   return `${Math.round(seconds / 3600)}h`;
 }
 
+function pruneRecentCancels(now = Date.now()) {
+  for (const [tabId, info] of recentCancels) {
+    if (!info || now - info.at > RECENT_CANCEL_TTL_MS) {
+      recentCancels.delete(tabId);
+    }
+  }
+  while (recentCancels.size > RECENT_CANCEL_MAX) {
+    const oldest = recentCancels.keys().next().value;
+    if (oldest === undefined) break;
+    recentCancels.delete(oldest);
+  }
+}
+
+function delayMsForSeconds(seconds) {
+  const secs = Math.floor(Number(seconds));
+  if (!Number.isFinite(secs) || secs < 1) return 1000;
+  return Math.min(secs, MAX_INTERVAL_SECS) * 1000;
+}
+
 async function setIcon(tabId, active) {
   try {
     await api.action.setIcon({ tabId, path: active ? ICON_ACTIVE : ICON_IDLE });
-  } catch {
-    // tab may be gone — ignore
+  } catch (e) {
+    console.warn("setIcon failed (tab may be gone):", e);
   }
 }
 
@@ -85,8 +110,8 @@ async function showActive(tabId, seconds) {
   try {
     await api.action.setBadgeBackgroundColor({ tabId, color: "#0074e8" });
     await api.action.setBadgeText({ tabId, text: badgeText(seconds) });
-  } catch {
-    // tab may be gone — ignore
+  } catch (e) {
+    console.warn("showActive badge failed (tab may be gone):", e);
   }
 }
 
@@ -94,8 +119,8 @@ async function showIdle(tabId) {
   await setIcon(tabId, false);
   try {
     await api.action.setBadgeText({ tabId, text: "" });
-  } catch {
-    // tab may be gone — ignore
+  } catch (e) {
+    console.warn("showIdle badge failed (tab may be gone):", e);
   }
 }
 
@@ -104,8 +129,8 @@ async function showCancelled(tabId) {
   try {
     await api.action.setBadgeBackgroundColor({ tabId, color: "#e07f00" });
     await api.action.setBadgeText({ tabId, text: "!" });
-  } catch {
-    // tab may be gone — ignore
+  } catch (e) {
+    console.warn("showCancelled badge failed (tab may be gone):", e);
   }
 }
 
@@ -116,11 +141,14 @@ async function showCancelled(tabId) {
  *   can explain why; null for manual stops / supersedes.
  */
 async function stopTimer(tabId, autoCancel = null) {
+  if (!isValidTabId(tabId)) return;
   const st = timers.get(tabId);
   if (st) clearTimeout(st.timeoutId);
   timers.delete(tabId);
   if (autoCancel) {
+    pruneRecentCancels();
     recentCancels.set(tabId, { ...autoCancel, at: Date.now() });
+    pruneRecentCancels();
     await showCancelled(tabId);
   } else {
     recentCancels.delete(tabId);
@@ -148,21 +176,28 @@ function armTimer(tabId, state) {
         return;
       }
       await api.tabs.reload(tabId);
-    } catch {
-      // Tab closed or reload rejected — drop the timer.
+    } catch (e) {
+      // Tab closed or reload rejected — drop the timer and reset the badge
+      // so it can't get stuck showing an active interval for a dead timer.
+      console.warn(`timer for tab ${tabId} dropped:`, e);
       timers.delete(tabId);
       recentCancels.delete(tabId);
+      await showIdle(tabId);
       return;
     }
     // Self-perpetuating: onUpdated does NOT reschedule, the chain re-arms here.
     const fresh = timers.get(tabId);
     if (fresh) fresh.timeoutId = armTimer(tabId, fresh);
-  }, Math.max(1, Math.floor(state.seconds)) * 1000);
+  }, delayMsForSeconds(state.seconds));
 }
 
 async function startTimer(tabId, seconds, scope) {
+  if (!isValidTabId(tabId)) throw new Error("Invalid tab");
   const secs = Math.floor(Number(seconds));
   if (!Number.isFinite(secs) || secs < 1) throw new Error("Invalid interval");
+  if (secs > MAX_INTERVAL_SECS) {
+    throw new Error(`Interval too long (max ${MAX_INTERVAL_SECS} seconds)`);
+  }
   if (!["tab", "page", "domain"].includes(scope)) throw new Error("Invalid scope");
 
   const tab = await api.tabs.get(tabId);
@@ -192,14 +227,18 @@ async function startTimer(tabId, seconds, scope) {
 // --- navigation guard: auto-cancel when a locked tab leaves its scope ---
 
 api.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  const st = timers.get(tabId);
-  if (!st || st.scope === "tab") return;
-  const url = tab?.url ?? changeInfo?.url;
-  if (!url) return;
-  if (st.scope === "page" && pageKeyForUrl(url) !== st.pageKey) {
-    await stopTimer(tabId, lockInfo(st));
-  } else if (st.scope === "domain" && hostForUrl(url) !== st.host) {
-    await stopTimer(tabId, lockInfo(st));
+  try {
+    const st = timers.get(tabId);
+    if (!st || st.scope === "tab") return;
+    const url = tab?.url ?? changeInfo?.url;
+    if (!url) return;
+    if (st.scope === "page" && pageKeyForUrl(url) !== st.pageKey) {
+      await stopTimer(tabId, lockInfo(st));
+    } else if (st.scope === "domain" && hostForUrl(url) !== st.host) {
+      await stopTimer(tabId, lockInfo(st));
+    }
+  } catch (e) {
+    console.warn(`onUpdated guard failed for tab ${tabId}:`, e);
   }
 });
 
@@ -210,33 +249,110 @@ api.tabs.onRemoved.addListener((tabId) => {
   recentCancels.delete(tabId);
 });
 
+// Tab replacement (prerender / session-restore swap): migrate the timer to
+// the new tab id. The old timeout closure still references the removed id,
+// so re-arm under the new id instead of reusing the handle.
+if (api.tabs.onReplaced?.addListener) {
+  api.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+    try {
+      const st = timers.get(removedTabId);
+      if (st) {
+        clearTimeout(st.timeoutId);
+        timers.delete(removedTabId);
+        st.timeoutId = armTimer(addedTabId, st);
+        timers.set(addedTabId, st);
+        await showActive(addedTabId, st.seconds);
+      }
+      const notice = recentCancels.get(removedTabId);
+      if (notice) {
+        recentCancels.delete(removedTabId);
+        recentCancels.set(addedTabId, notice);
+      }
+    } catch (e) {
+      console.warn(`onReplaced migration ${removedTabId} -> ${addedTabId} failed:`, e);
+    }
+  });
+}
+
+// --- startup / suspend hygiene --------------------------------------------
+// Badges are per-tab UI state that can outlive the in-memory timer map
+// across restarts or background reloads. Reset them best-effort so a stale
+// interval badge is never shown for a dead timer.
+async function resetAllBadges() {
+  try {
+    const tabs = await api.tabs.query({});
+    for (const t of tabs) {
+      if (t?.id == null) continue;
+      try {
+        await showIdle(t.id);
+      } catch (e) {
+        console.warn(`reset badge for tab ${t.id} failed:`, e);
+      }
+    }
+  } catch (e) {
+    console.warn("resetAllBadges failed:", e);
+  }
+}
+
+if (api.runtime.onStartup?.addListener) {
+  api.runtime.onStartup.addListener(() => {
+    timers.clear();
+    pruneRecentCancels();
+    resetAllBadges().catch((e) => console.warn("onStartup reset failed:", e));
+  });
+}
+
+if (api.runtime.onInstalled?.addListener) {
+  api.runtime.onInstalled.addListener(() => {
+    resetAllBadges().catch((e) => console.warn("onInstalled reset failed:", e));
+  });
+}
+
+if (api.runtime.onSuspend?.addListener) {
+  api.runtime.onSuspend.addListener(() => {
+    for (const [, st] of timers) clearTimeout(st.timeoutId);
+  });
+}
+
+// Opportunistic expiry so un-consumed cancel notices can't accumulate.
+setInterval(() => pruneRecentCancels(), 60 * 1000);
+
 // --- popup messaging ------------------------------------------------------
 
 api.runtime.onMessage.addListener(async (msg) => {
   if (!msg || typeof msg !== "object") return null;
 
   if (msg.type === "getTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
     const st = timers.get(msg.tabId);
     if (!st) return null;
     return { seconds: st.seconds, scope: st.scope, pageKey: st.pageKey, host: st.host };
   }
 
   if (msg.type === "startTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
     return await startTimer(msg.tabId, msg.seconds, msg.scope);
   }
 
   if (msg.type === "stopTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
     await stopTimer(msg.tabId);
     return { stopped: true };
   }
 
   if (msg.type === "getCancel") {
+    if (!isValidTabId(msg.tabId)) return null;
+    pruneRecentCancels();
     const info = recentCancels.get(msg.tabId) ?? null;
-    if (info) {
-      // Consume the notice: reset the yellow light, popup holds the text.
+    if (!info) return null;
+    if (Date.now() - info.at > RECENT_CANCEL_TTL_MS) {
       recentCancels.delete(msg.tabId);
       await showIdle(msg.tabId);
+      return null;
     }
+    // Consume the notice: reset the yellow light, popup holds the text.
+    recentCancels.delete(msg.tabId);
+    await showIdle(msg.tabId);
     return info;
   }
 
