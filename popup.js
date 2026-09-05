@@ -50,6 +50,7 @@ function selectedScope() {
 }
 
 function setScope(scope) {
+  if (!["tab", "page", "domain"].includes(scope)) return;
   const radio = document.querySelector(`input[name="scope"][value="${scope}"]`);
   if (radio) radio.checked = true;
 }
@@ -78,6 +79,7 @@ function refreshUI() {
   const label = targetForScope(scope);
   targetLabel.textContent = label || "—";
   targetLabel.title = label || "";
+  if (!intervalInput.disabled) saveBtn.disabled = false;
 
   const cur = Number(intervalInput.value);
   presetBtns.forEach((b) => b.classList.toggle("active", Number(b.dataset.secs) === cur));
@@ -135,6 +137,7 @@ async function loadState() {
   try {
     tabs = await api.tabs.query({ active: true, currentWindow: true });
   } catch (e) {
+    console.warn("Auto Refresh: couldn't read active tab", e);
     setStatus("Couldn't read the active tab.", "err");
     return;
   }
@@ -152,11 +155,9 @@ async function loadState() {
     url = null;
   }
 
-  const blocked =
-    !url ||
-    ["about:", "moz-extension:", "chrome:", "edge:", "view-source:", "data:"].some((p) =>
-      currentTab.url.startsWith(p)
-    );
+  // Allowlist: only http(s) pages are refreshable. This blocks about:,
+  // moz-extension:, chrome:, edge:, view-source:, data:, file:, etc.
+  const blocked = !url || (url.protocol !== "http:" && url.protocol !== "https:");
   if (blocked) {
     disableAll("This page can't be auto-refreshed.");
     return;
@@ -167,7 +168,8 @@ async function loadState() {
 
   try {
     activeTimer = await api.runtime.sendMessage({ type: "getTimer", tabId: currentTab.id });
-  } catch {
+  } catch (e) {
+    console.warn("Auto Refresh: getTimer failed", e);
     activeTimer = null;
   }
   try {
@@ -175,7 +177,8 @@ async function loadState() {
     cancelInfo = activeTimer
       ? null
       : await api.runtime.sendMessage({ type: "getCancel", tabId: currentTab.id });
-  } catch {
+  } catch (e) {
+    console.warn("Auto Refresh: getCancel failed", e);
     cancelInfo = null;
   }
 
@@ -196,13 +199,20 @@ async function loadState() {
 }
 
 async function save() {
+  if (!currentTab?.id) return;
   const secs = Math.floor(Number(intervalInput.value));
   if (!Number.isFinite(secs) || secs < 1) {
     setStatus("Enter an interval of at least 1 second.", "err");
     intervalInput.focus();
     return;
   }
+  if (secs > 86400) {
+    setStatus("Enter an interval of at most 24 hours (86400 seconds).", "err");
+    intervalInput.focus();
+    return;
+  }
   const scope = selectedScope();
+  saveBtn.disabled = true;
   try {
     activeTimer = await api.runtime.sendMessage({
       type: "startTimer",
@@ -212,9 +222,12 @@ async function save() {
     });
     cancelInfo = null;
   } catch (e) {
+    console.warn("Auto Refresh: startTimer failed", e);
     setStatus(e?.message || "Couldn't start the timer.", "err");
+    saveBtn.disabled = false;
     return;
   }
+  saveBtn.disabled = false;
   refreshUI();
   setStatus(
     scope === "tab"
@@ -227,9 +240,11 @@ async function save() {
 }
 
 async function stop() {
+  if (!currentTab?.id) return;
   try {
     await api.runtime.sendMessage({ type: "stopTimer", tabId: currentTab.id });
-  } catch {
+  } catch (e) {
+    console.warn("Auto Refresh: stopTimer failed", e);
     // background may have already dropped it — treat as stopped
   }
   activeTimer = null;

@@ -34,23 +34,23 @@
 
     <section class="card">
     <label class="field-label" for="intervalInput">Refresh every (seconds)</label>
-    <input id="intervalInput" type="number" min="1" step="1" placeholder="e.g. 60" />
+    <input id="intervalInput" type="number" min="1" max="86400" step="1" placeholder="e.g. 60" inputmode="numeric" />
 
     <div class="presets" aria-label="Quick intervals">
-      <button data-secs="60">1 min</button>
-      <button data-secs="300">5 min</button>
-      <button data-secs="900">15 min</button>
-      <button data-secs="1800">30 min</button>
-      <button data-secs="3600">60 min</button>
+      <button type="button" data-secs="60">1 min</button>
+      <button type="button" data-secs="300">5 min</button>
+      <button type="button" data-secs="900">15 min</button>
+      <button type="button" data-secs="1800">30 min</button>
+      <button type="button" data-secs="3600">60 min</button>
     </div>
 
     <div class="actions">
-      <button id="saveBtn" class="primary">Start</button>
-      <button id="stopBtn" class="ghost">Stop</button>
+      <button id="saveBtn" type="button" class="primary" disabled>Start</button>
+      <button id="stopBtn" type="button" class="ghost" disabled>Stop</button>
     </div>
     </section>
 
-    <div id="status" class="status"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
   </div>
   <script src="popup.js"></script>
 </body>
