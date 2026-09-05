@@ -11,38 +11,48 @@
       <span id="statusDot" class="dot off" title="status"></span>
     </header>
 
-    <div class="scope-toggle" role="radiogroup" aria-label="Refresh scope">
-      <label class="scope-option">
-        <input type="radio" name="scope" value="page" checked />
+    <section class="card" aria-labelledby="scopeLabel">
+    <span class="field-label" id="scopeLabel">Refresh scope</span>
+    <div class="scope-toggle" role="radiogroup" aria-labelledby="scopeLabel">
+      <label class="scope-option" title="Keep refreshing this tab even if you navigate elsewhere">
+        <input type="radio" name="scope" value="tab" checked />
+        <span>Tab</span>
+      </label>
+      <label class="scope-option" title="Stop automatically when this tab leaves the page (#hash changes don't count)">
+        <input type="radio" name="scope" value="page" />
         <span>Page</span>
       </label>
-      <label class="scope-option">
+      <label class="scope-option" title="Stop automatically when this tab leaves this site">
         <input type="radio" name="scope" value="domain" />
         <span>Domain</span>
       </label>
     </div>
 
     <div id="targetLabel" class="target" title="">—</div>
+    <div id="scopeDesc" class="hint"></div>
+    </section>
 
+    <section class="card">
     <label class="field-label" for="intervalInput">Refresh every (seconds)</label>
-    <input id="intervalInput" type="number" min="1" step="1" placeholder="e.g. 60" />
+    <input id="intervalInput" type="number" min="1" max="86400" step="1" placeholder="e.g. 60" inputmode="numeric" />
 
     <div class="presets" aria-label="Quick intervals">
-      <button data-secs="60">1 min</button>
-      <button data-secs="300">5 min</button>
-      <button data-secs="900">15 min</button>
-      <button data-secs="1800">30 min</button>
-      <button data-secs="3600">60 min</button>
+      <button type="button" data-secs="60">1 min</button>
+      <button type="button" data-secs="300">5 min</button>
+      <button type="button" data-secs="900">15 min</button>
+      <button type="button" data-secs="1800">30 min</button>
+      <button type="button" data-secs="3600">60 min</button>
     </div>
 
     <div class="actions">
-      <button id="saveBtn" class="primary">Start</button>
-      <button id="stopBtn" class="ghost">Stop</button>
+      <button id="saveBtn" type="button" class="primary" disabled>Start</button>
+      <button id="stopBtn" type="button" class="ghost" disabled>Stop</button>
     </div>
+    </section>
 
-    <div id="status" class="status"></div>
-    <div id="summary" class="summary"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
   </div>
+  <script src="utils.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,165 +1,325 @@
-// Background scheduler — uses tabs.reload() + setTimeout so
-// second-precision intervals work (alarms clamp to >= 30s).
-const api = globalThis.browser ?? chrome;
+// Per-tab auto-refresh scheduler.
+//
+// Timers belong to a single tabId only — they never leak to other tabs.
+// Scope is purely an auto-cancel guard evaluated on navigation:
+//   tab    = no lock, follows the tab anywhere
+//   page   = cancels when the tab leaves the locked page (hash ignored)
+//   domain = cancels when the tab leaves the locked hostname
+//
+// Icon states (per tab):
+//   idle      = gray icon, no badge
+//   active    = blue icon + interval badge (blue)
+//   cancelled = gray icon + yellow "!" badge; reason waits for the popup
+//               (option-1 passive notice) and is consumed on popup open.
+//
+// Second-precision via setTimeout + tabs.reload (alarms clamp to >= 30s,
+// so they're intentionally not used). Timers live in memory and die with
+// the tab / browser session — nothing is persisted.
+const api = globalThis.browser ?? globalThis.chrome;
 
-const timers = new Map(); // tabId -> timeout id
+// Shared pure helpers live in utils.js (loaded first via manifest
+// background.scripts). Fall back to node require when running tests.
+const Utils =
+  globalThis.AutoRefreshUtils ??
+  (typeof require === "function" ? require("./utils.js") : null);
+if (!Utils) throw new Error("AutoRefreshUtils not loaded (utils.js missing)");
+const { MAX_INTERVAL_SECS, isRefreshableUrl, pageKeyForUrl, hostForUrl, badgeText } = Utils;
 
-const IGNORED_SCHEMES = ["about:", "moz-extension:", "chrome:", "edge:", "view-source:", "data:", "file:"];
+// Auto-cancel notices expire so the map can't grow without bound when the
+// popup is never reopened for a tab.
+const RECENT_CANCEL_TTL_MS = 10 * 60 * 1000;
+const RECENT_CANCEL_MAX = 50;
 
-function isRefreshableUrl(url) {
-  if (!url) return false;
-  try {
-    const u = new URL(url);
-    return !IGNORED_SCHEMES.some((s) => u.protocol === s || url.startsWith(s));
-  } catch {
-    return false;
+// tabId -> { timeoutId, seconds, scope, pageKey, host }
+const timers = new Map();
+
+// tabId -> { scope, seconds, host, pageKey, at } (unseen auto-cancel notices)
+const recentCancels = new Map();
+
+const ICON_IDLE = { 48: "icons/icon-48-gray.svg", 96: "icons/icon-96-gray.svg" };
+const ICON_ACTIVE = { 48: "icons/icon-48.svg", 96: "icons/icon-96.svg" };
+
+function isValidTabId(tabId) {
+  return Number.isInteger(tabId) && tabId > 0;
+}
+
+function pruneRecentCancels(now = Date.now()) {
+  for (const [tabId, info] of recentCancels) {
+    if (!info || now - info.at > RECENT_CANCEL_TTL_MS) {
+      recentCancels.delete(tabId);
+    }
+  }
+  while (recentCancels.size > RECENT_CANCEL_MAX) {
+    const oldest = recentCancels.keys().next().value;
+    if (oldest === undefined) break;
+    recentCancels.delete(oldest);
   }
 }
 
-function pageKeyForUrl(url) {
+function delayMsForSeconds(seconds) {
+  const secs = Math.floor(Number(seconds));
+  if (!Number.isFinite(secs) || secs < 1) return 1000;
+  return Math.min(secs, MAX_INTERVAL_SECS) * 1000;
+}
+
+async function setIcon(tabId, active) {
   try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.href;
-  } catch {
-    return url.split("#")[0];
+    await api.action.setIcon({ tabId, path: active ? ICON_ACTIVE : ICON_IDLE });
+  } catch (e) {
+    console.warn("setIcon failed (tab may be gone):", e);
   }
 }
 
-function hostForUrl(url) {
+async function showActive(tabId, seconds) {
+  await setIcon(tabId, true);
   try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
+    await api.action.setBadgeBackgroundColor({ tabId, color: "#0074e8" });
+    await api.action.setBadgeText({ tabId, text: badgeText(seconds) });
+  } catch (e) {
+    console.warn("showActive badge failed (tab may be gone):", e);
   }
 }
 
-async function getRules() {
-  const { pageRules = {}, domainRules = {} } = await api.storage.local.get([
-    "pageRules",
-    "domainRules",
-  ]);
-  return { pageRules, domainRules };
+async function showIdle(tabId) {
+  await setIcon(tabId, false);
+  try {
+    await api.action.setBadgeText({ tabId, text: "" });
+  } catch (e) {
+    console.warn("showIdle badge failed (tab may be gone):", e);
+  }
+}
+
+async function showCancelled(tabId) {
+  await setIcon(tabId, false);
+  try {
+    await api.action.setBadgeBackgroundColor({ tabId, color: "#e07f00" });
+    await api.action.setBadgeText({ tabId, text: "!" });
+  } catch (e) {
+    console.warn("showCancelled badge failed (tab may be gone):", e);
+  }
 }
 
 /**
- * Page rule wins over domain rule.
- * Returns { seconds, scope: 'page' | 'domain', key } or null.
+ * @param {number} tabId
+ * @param {{ scope, seconds, host, pageKey } | null} autoCancel
+ *   Pass the timer's lock info when the scope guard fires so the popup
+ *   can explain why; null for manual stops / supersedes.
  */
-async function getMatchForUrl(url) {
-  if (!isRefreshableUrl(url)) return null;
-  const { pageRules, domainRules } = await getRules();
-  const pKey = pageKeyForUrl(url);
-  const host = hostForUrl(url);
-  if (pKey && pageRules[pKey] > 0) {
-    return { seconds: pageRules[pKey], scope: "page", key: pKey };
-  }
-  if (host && domainRules[host] > 0) {
-    return { seconds: domainRules[host], scope: "domain", key: host };
-  }
-  return null;
-}
-
-function clearTimer(tabId) {
-  const t = timers.get(tabId);
-  if (t) {
-    clearTimeout(t);
-    timers.delete(tabId);
+async function stopTimer(tabId, autoCancel = null) {
+  if (!isValidTabId(tabId)) return;
+  const st = timers.get(tabId);
+  if (st) clearTimeout(st.timeoutId);
+  timers.delete(tabId);
+  if (autoCancel) {
+    pruneRecentCancels();
+    recentCancels.set(tabId, { ...autoCancel, at: Date.now() });
+    pruneRecentCancels();
+    await showCancelled(tabId);
+  } else {
+    recentCancels.delete(tabId);
+    await showIdle(tabId);
   }
 }
 
-async function updateBadge(tabId, match) {
-  try {
-    if (!match) {
-      await api.action.setBadgeText({ tabId, text: "" });
+function lockInfo(state) {
+  return { scope: state.scope, seconds: state.seconds, host: state.host, pageKey: state.pageKey };
+}
+
+function armTimer(tabId, state) {
+  return setTimeout(async () => {
+    const cur = timers.get(tabId);
+    if (!cur) return;
+    try {
+      const tab = await api.tabs.get(tabId);
+      // Re-validate scope right before firing (covers races with navigation).
+      if (cur.scope === "page" && pageKeyForUrl(tab.url) !== cur.pageKey) {
+        await stopTimer(tabId, lockInfo(cur));
+        return;
+      }
+      if (cur.scope === "domain" && hostForUrl(tab.url) !== cur.host) {
+        await stopTimer(tabId, lockInfo(cur));
+        return;
+      }
+      await api.tabs.reload(tabId);
+    } catch (e) {
+      // Tab closed or reload rejected — drop the timer and reset the badge
+      // so it can't get stuck showing an active interval for a dead timer.
+      console.warn(`timer for tab ${tabId} dropped:`, e);
+      timers.delete(tabId);
+      recentCancels.delete(tabId);
+      await showIdle(tabId);
       return;
     }
-    const s = match.seconds;
-    const text = s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
-    await api.action.setBadgeBackgroundColor({ tabId, color: "#0074e8" });
-    await api.action.setBadgeText({ tabId, text });
-  } catch {
-    // tab may be gone — ignore
-  }
+    // Self-perpetuating: onUpdated does NOT reschedule, the chain re-arms here.
+    const fresh = timers.get(tabId);
+    if (fresh) fresh.timeoutId = armTimer(tabId, fresh);
+  }, delayMsForSeconds(state.seconds));
 }
 
-async function scheduleForTab(tab) {
-  if (!tab || tab.id == null) return;
-  clearTimer(tab.id);
+async function startTimer(tabId, seconds, scope) {
+  if (!isValidTabId(tabId)) throw new Error("Invalid tab");
+  const secs = Math.floor(Number(seconds));
+  if (!Number.isFinite(secs) || secs < 1) throw new Error("Invalid interval");
+  if (secs > MAX_INTERVAL_SECS) {
+    throw new Error(`Interval too long (max ${MAX_INTERVAL_SECS} seconds)`);
+  }
+  if (!["tab", "page", "domain"].includes(scope)) throw new Error("Invalid scope");
 
-  // Re-read fresh URL in case `tab` object is stale.
-  let url = tab.url;
+  const tab = await api.tabs.get(tabId);
+  if (!tab?.url || !isRefreshableUrl(tab.url)) {
+    throw new Error("This page can't be auto-refreshed");
+  }
+
+  const existing = timers.get(tabId);
+  if (existing) clearTimeout(existing.timeoutId);
+
+  const state = {
+    timeoutId: 0,
+    seconds: secs,
+    scope,
+    pageKey: pageKeyForUrl(tab.url),
+    host: hostForUrl(tab.url),
+  };
+  state.timeoutId = armTimer(tabId, state);
+  timers.set(tabId, state);
+  recentCancels.delete(tabId); // a fresh timer supersedes any old notice
+  await showActive(tabId, secs);
+
+  const { timeoutId: _t, ...publicState } = state;
+  return publicState;
+}
+
+// --- navigation guard: auto-cancel when a locked tab leaves its scope ---
+
+api.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   try {
-    if (!url) {
-      const fresh = await api.tabs.get(tab.id);
-      url = fresh.url;
+    const st = timers.get(tabId);
+    if (!st || st.scope === "tab") return;
+    const url = tab?.url ?? changeInfo?.url;
+    if (!url) return;
+    if (st.scope === "page" && pageKeyForUrl(url) !== st.pageKey) {
+      await stopTimer(tabId, lockInfo(st));
+    } else if (st.scope === "domain" && hostForUrl(url) !== st.host) {
+      await stopTimer(tabId, lockInfo(st));
     }
-  } catch {
-    return;
+  } catch (e) {
+    console.warn(`onUpdated guard failed for tab ${tabId}:`, e);
   }
+});
 
-  const match = await getMatchForUrl(url);
-  await updateBadge(tab.id, match);
-  if (!match || !(match.seconds > 0)) return;
+api.tabs.onRemoved.addListener((tabId) => {
+  const st = timers.get(tabId);
+  if (st) clearTimeout(st.timeoutId);
+  timers.delete(tabId);
+  recentCancels.delete(tabId);
+});
 
-  const delayMs = Math.max(1, Math.floor(match.seconds)) * 1000;
-  const timeoutId = setTimeout(async () => {
-    timers.delete(tab.id);
+// Tab replacement (prerender / session-restore swap): migrate the timer to
+// the new tab id. The old timeout closure still references the removed id,
+// so re-arm under the new id instead of reusing the handle.
+if (api.tabs.onReplaced?.addListener) {
+  api.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
     try {
-      await api.tabs.reload(tab.id);
-      // onUpdated(complete) will reschedule; add a fallback reschedule
-      // in case the event is missed (e.g. reload fails silently).
-      try {
-        const fresh = await api.tabs.get(tab.id);
-        scheduleForTab(fresh);
-      } catch {
-        /* tab closed */
+      const st = timers.get(removedTabId);
+      if (st) {
+        clearTimeout(st.timeoutId);
+        timers.delete(removedTabId);
+        st.timeoutId = armTimer(addedTabId, st);
+        timers.set(addedTabId, st);
+        await showActive(addedTabId, st.seconds);
       }
-    } catch {
-      /* tab closed or no permission — ignore */
+      const notice = recentCancels.get(removedTabId);
+      if (notice) {
+        recentCancels.delete(removedTabId);
+        recentCancels.set(addedTabId, notice);
+      }
+    } catch (e) {
+      console.warn(`onReplaced migration ${removedTabId} -> ${addedTabId} failed:`, e);
     }
-  }, delayMs);
-
-  timers.set(tab.id, timeoutId);
+  });
 }
 
-async function scheduleAll() {
+// --- startup / suspend hygiene --------------------------------------------
+// Badges are per-tab UI state that can outlive the in-memory timer map
+// across restarts or background reloads. Reset them best-effort so a stale
+// interval badge is never shown for a dead timer.
+async function resetAllBadges() {
   try {
     const tabs = await api.tabs.query({});
-    await Promise.all(tabs.map(scheduleForTab));
+    for (const t of tabs) {
+      if (t?.id == null) continue;
+      try {
+        await showIdle(t.id);
+      } catch (e) {
+        console.warn(`reset badge for tab ${t.id} failed:`, e);
+      }
+    }
   } catch (e) {
-    console.warn("Auto Refresh: scheduleAll failed", e);
+    console.warn("resetAllBadges failed:", e);
   }
 }
 
-// --- events ---------------------------------------------------------------
+if (api.runtime.onStartup?.addListener) {
+  api.runtime.onStartup.addListener(() => {
+    timers.clear();
+    pruneRecentCancels();
+    resetAllBadges().catch((e) => console.warn("onStartup reset failed:", e));
+  });
+}
 
-api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  // Reschedule when navigation commits/completes or URL changes.
-  if (changeInfo.status === "complete" || changeInfo.url) {
-    scheduleForTab(tab);
+if (api.runtime.onInstalled?.addListener) {
+  api.runtime.onInstalled.addListener(() => {
+    resetAllBadges().catch((e) => console.warn("onInstalled reset failed:", e));
+  });
+}
+
+if (api.runtime.onSuspend?.addListener) {
+  api.runtime.onSuspend.addListener(() => {
+    for (const [, st] of timers) clearTimeout(st.timeoutId);
+  });
+}
+
+// Opportunistic expiry so un-consumed cancel notices can't accumulate.
+setInterval(() => pruneRecentCancels(), 60 * 1000);
+
+// --- popup messaging ------------------------------------------------------
+
+api.runtime.onMessage.addListener(async (msg) => {
+  if (!msg || typeof msg !== "object") return null;
+
+  if (msg.type === "getTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
+    const st = timers.get(msg.tabId);
+    if (!st) return null;
+    return { seconds: st.seconds, scope: st.scope, pageKey: st.pageKey, host: st.host };
   }
-});
 
-api.tabs.onRemoved.addListener((tabId) => clearTimer(tabId));
-
-api.tabs.onActivated.addListener(async ({ tabId }) => {
-  try {
-    const tab = await api.tabs.get(tabId);
-    scheduleForTab(tab);
-  } catch {
-    /* ignore */
+  if (msg.type === "startTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
+    return await startTimer(msg.tabId, msg.seconds, msg.scope);
   }
-});
 
-api.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.pageRules || changes.domainRules)) {
-    scheduleAll();
+  if (msg.type === "stopTimer") {
+    if (!isValidTabId(msg.tabId)) return null;
+    await stopTimer(msg.tabId);
+    return { stopped: true };
   }
+
+  if (msg.type === "getCancel") {
+    if (!isValidTabId(msg.tabId)) return null;
+    pruneRecentCancels();
+    const info = recentCancels.get(msg.tabId) ?? null;
+    if (!info) return null;
+    if (Date.now() - info.at > RECENT_CANCEL_TTL_MS) {
+      recentCancels.delete(msg.tabId);
+      await showIdle(msg.tabId);
+      return null;
+    }
+    // Consume the notice: reset the yellow light, popup holds the text.
+    recentCancels.delete(msg.tabId);
+    await showIdle(msg.tabId);
+    return info;
+  }
+
+  return null;
 });
-
-api.runtime.onInstalled.addListener(scheduleAll);
-if (api.runtime.onStartup) api.runtime.onStartup.addListener(scheduleAll);
-
-// Initial sweep (covers browser restart with persistent background page).
-scheduleAll();

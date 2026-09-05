@@ -30,6 +30,28 @@ body {
 
 .wrap { width: 320px; padding: 14px 14px 12px; }
 
+.card {
+  background: var(--chip);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+/* Modern blend when supported (FF 113+); plain --chip fallback above. */
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  .card {
+    background: color-mix(in srgb, var(--chip) 55%, var(--bg));
+  }
+}
+
+.card .target,
+.card .presets button {
+  background: var(--bg);
+}
+
+.card .hint:last-child { margin-bottom: 0; }
+
 header {
   display: flex;
   align-items: center;
@@ -45,10 +67,11 @@ h1 { font-size: 15px; margin: 0; }
   background: #b1b1be;
 }
 .dot.on { background: #30a147; box-shadow: 0 0 0 3px rgba(48,161,71,.2); }
+.dot.warn { background: #e07f00; box-shadow: 0 0 0 3px rgba(224,127,0,.2); }
 
 .scope-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -65,7 +88,8 @@ h1 { font-size: 15px; margin: 0; }
   user-select: none;
 }
 
-.scope-option:has(input:checked) {
+.scope-option:has(input:checked),
+.scope-option.selected {
   border-color: var(--accent);
   background: rgba(0, 116, 232, .1);
   font-weight: 600;
@@ -79,10 +103,16 @@ h1 { font-size: 15px; margin: 0; }
   background: var(--chip);
   border-radius: 6px;
   padding: 6px 8px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 10px;
 }
 
 .field-label { display: block; font-weight: 600; margin-bottom: 4px; }
@@ -154,4 +184,9 @@ button.ghost:disabled { opacity: .5; cursor: not-allowed; }
 .status.warn { color: #e07f00; }
 .status.err { color: #e22850; }
 
-.summary { margin-top: 4px; font-size: 12px; color: var(--muted); }
+button:focus-visible,
+input:focus-visible,
+.scope-option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
