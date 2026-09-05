@@ -30,6 +30,21 @@ body {
 
 .wrap { width: 320px; padding: 14px 14px 12px; }
 
+.card {
+  background: color-mix(in srgb, var(--chip) 55%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.card .target,
+.card .presets button {
+  background: var(--bg);
+}
+
+.card .hint:last-child { margin-bottom: 0; }
+
 header {
   display: flex;
   align-items: center;
@@ -45,10 +60,11 @@ h1 { font-size: 15px; margin: 0; }
   background: #b1b1be;
 }
 .dot.on { background: #30a147; box-shadow: 0 0 0 3px rgba(48,161,71,.2); }
+.dot.warn { background: #e07f00; box-shadow: 0 0 0 3px rgba(224,127,0,.2); }
 
 .scope-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -79,10 +95,16 @@ h1 { font-size: 15px; margin: 0; }
   background: var(--chip);
   border-radius: 6px;
   padding: 6px 8px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 10px;
 }
 
 .field-label { display: block; font-weight: 600; margin-bottom: 4px; }

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Auto Refresh — Page & Domain Timer",
-  "version": "1.0.0",
-  "description": "Auto-refresh any page or entire domain at custom intervals you control.",
-  "permissions": ["tabs", "storage"],
+  "name": "Auto Refresh — Per-Tab Timer",
+  "version": "1.1",
+  "description": "Auto-refresh the current tab at custom intervals, optionally locked to the page or domain.",
+  "permissions": ["tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["background.js"]
@@ -12,8 +12,8 @@
     "default_title": "Auto Refresh",
     "default_popup": "popup.html",
     "default_icon": {
-      "48": "icons/icon-48.svg",
-      "96": "icons/icon-96.svg"
+      "48": "icons/icon-48-gray.svg",
+      "96": "icons/icon-96-gray.svg"
     }
   },
   "icons": {

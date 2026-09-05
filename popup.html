@@ -11,19 +11,28 @@
       <span id="statusDot" class="dot off" title="status"></span>
     </header>
 
-    <div class="scope-toggle" role="radiogroup" aria-label="Refresh scope">
-      <label class="scope-option">
-        <input type="radio" name="scope" value="page" checked />
+    <section class="card" aria-labelledby="scopeLabel">
+    <span class="field-label" id="scopeLabel">Refresh scope</span>
+    <div class="scope-toggle" role="radiogroup" aria-labelledby="scopeLabel">
+      <label class="scope-option" title="Keep refreshing this tab even if you navigate elsewhere">
+        <input type="radio" name="scope" value="tab" checked />
+        <span>Tab</span>
+      </label>
+      <label class="scope-option" title="Stop automatically when this tab leaves the page (#hash changes don't count)">
+        <input type="radio" name="scope" value="page" />
         <span>Page</span>
       </label>
-      <label class="scope-option">
+      <label class="scope-option" title="Stop automatically when this tab leaves this site">
         <input type="radio" name="scope" value="domain" />
         <span>Domain</span>
       </label>
     </div>
 
     <div id="targetLabel" class="target" title="">—</div>
+    <div id="scopeDesc" class="hint"></div>
+    </section>
 
+    <section class="card">
     <label class="field-label" for="intervalInput">Refresh every (seconds)</label>
     <input id="intervalInput" type="number" min="1" step="1" placeholder="e.g. 60" />
 
@@ -39,9 +48,9 @@
       <button id="saveBtn" class="primary">Start</button>
       <button id="stopBtn" class="ghost">Stop</button>
     </div>
+    </section>
 
     <div id="status" class="status"></div>
-    <div id="summary" class="summary"></div>
   </div>
   <script src="popup.js"></script>
 </body>
