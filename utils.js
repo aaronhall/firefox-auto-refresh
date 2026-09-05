@@ -1,6 +1,7 @@
-"use strict";
-
 // Shared pure helpers for the Auto Refresh extension.
+// Wrapped in an IIFE: classic extension scripts share one global lexical
+// scope, so top-level const/function names here would collide with the
+// destructured names in popup.js / background.js (SyntaxError, dead page).
 //
 // Loading strategy (documented choice):
 // - Firefox MV3 `background.scripts` is a classic (non-module) scripts
@@ -12,6 +13,9 @@
 //   AND via `module.exports` when running under node (CommonJS).
 // - Callers use `globalThis.AutoRefreshUtils` in the extension and
 //   `require("../utils.js")` in tests.
+
+(() => {
+"use strict";
 
 const MAX_INTERVAL_SECS = 86400; // 24h — well below setTimeout 2^31-1 ms overflow
 
@@ -96,3 +100,4 @@ globalThis.AutoRefreshUtils = AutoRefreshUtils;
 if (typeof module !== "undefined" && module.exports) {
   module.exports = AutoRefreshUtils;
 }
+})();
