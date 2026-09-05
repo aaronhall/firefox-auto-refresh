@@ -193,14 +193,32 @@ async function startTimer(tabId, seconds, scope) {
 
 api.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   try {
+    // NOTE: tab-specific badge text/icon are reset by the browser on every
+    // navigation (MDN: setBadgeText tabId "is reset when the user navigates
+    // this tab to a new page"), so any persisted visual state must be
+    // re-asserted here — including back/forward navigations, which fire
+    // onUpdated but match no scope guard.
     const st = timers.get(tabId);
-    if (!st || st.scope === "tab") return;
-    const url = tab?.url ?? changeInfo?.url;
-    if (!url) return;
-    if (st.scope === "page" && pageKeyForUrl(url) !== st.pageKey) {
-      await stopTimer(tabId, lockInfo(st));
-    } else if (st.scope === "domain" && hostForUrl(url) !== st.host) {
-      await stopTimer(tabId, lockInfo(st));
+    if (st) {
+      if (st.scope === "tab") {
+        await showActive(tabId, st.seconds);
+        return;
+      }
+      const url = tab?.url ?? changeInfo?.url;
+      if (!url) return;
+      if (st.scope === "page" && pageKeyForUrl(url) !== st.pageKey) {
+        await stopTimer(tabId, lockInfo(st));
+      } else if (st.scope === "domain" && hostForUrl(url) !== st.host) {
+        await stopTimer(tabId, lockInfo(st));
+      } else {
+        await showActive(tabId, st.seconds);
+      }
+      return;
+    }
+    // No live timer: a pending cancel notice survives navigation (it is
+    // only consumed by opening the popup), so restore its yellow badge.
+    if (recentCancels.has(tabId)) {
+      await showCancelled(tabId);
     }
   } catch (e) {
     console.warn(`onUpdated guard failed for tab ${tabId}:`, e);
