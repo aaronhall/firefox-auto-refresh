@@ -1,4 +1,4 @@
-// Shared pure helpers for the Auto Refresh extension.
+// Shared pure helpers for the Tab Auto Reload extension.
 // Wrapped in an IIFE: classic extension scripts share one global lexical
 // scope, so top-level const/function names here would collide with the
 // destructured names in popup.js / background.js (SyntaxError, dead page).
@@ -19,7 +19,7 @@
 
 const MAX_INTERVAL_SECS = 86400; // 24h — well below setTimeout 2^31-1 ms overflow
 
-// Allowlist: only http(s) pages can be auto-refreshed. Everything else
+// Allowlist: only http(s) pages can be auto-reloaded. Everything else
 // (about:, moz-extension:, chrome:, view-source:, data:, file:, blob:, …)
 // is rejected. Denylists drift; an allowlist fails closed.
 function isRefreshableUrl(url) {

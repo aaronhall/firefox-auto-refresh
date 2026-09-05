@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Auto Refresh — Per-Tab Timer",
+  "name": "Tab Auto Reload — Per-Tab Timer",
   "version": "1.1",
-  "description": "Auto-refresh the current tab at custom intervals, optionally locked to the page or domain.",
+  "description": "Auto-reload the current tab at custom intervals, optionally locked to the page or domain.",
   "permissions": ["tabs"],
   "background": {
     "scripts": ["utils.js", "background.js"]
   },
   "action": {
-    "default_title": "Auto Refresh",
+    "default_title": "Tab Auto Reload",
     "default_popup": "popup.html",
     "default_icon": {
       "48": "icons/icon-48-gray.svg",
@@ -21,7 +21,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "auto-refresh-page-domain@example.local",
+      "id": "tab-auto-reload@example.local",
       "strict_min_version": "109.0"
     }
   }

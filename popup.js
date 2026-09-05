@@ -27,7 +27,7 @@ const REQUIRED_ELS = { targetLabel, intervalInput, saveBtn, stopBtn, statusEl, s
 function domReady() {
   for (const [name, el] of Object.entries(REQUIRED_ELS)) {
     if (!el) {
-      console.warn(`Auto Refresh: missing element #${name}`);
+      console.warn(`Tab Auto Reload: missing element #${name}`);
       return false;
     }
   }
@@ -57,7 +57,7 @@ function syncScopeSelected() {
 
 function setStatus(msg, kind = "") {
   if (!statusEl) {
-    console.warn("Auto Refresh: status element missing, cannot show:", msg);
+    console.warn("Tab Auto Reload: status element missing, cannot show:", msg);
     return;
   }
   statusEl.textContent = msg;
@@ -126,7 +126,7 @@ function refreshUI() {
 }
 
 function disableAll(msg) {
-  targetLabel.textContent = "Can't auto-refresh this page";
+  targetLabel.textContent = "Can't auto-reload this page";
   targetLabel.title = currentTab?.url ?? "";
   setStatus(msg, "warn");
   scopeDescEl.textContent = "";
@@ -144,7 +144,7 @@ async function loadState() {
   try {
     tabs = await api.tabs.query({ active: true, currentWindow: true });
   } catch (e) {
-    console.warn("Auto Refresh: couldn't read active tab", e);
+    console.warn("Tab Auto Reload: couldn't read active tab", e);
     setStatus("Couldn't read the active tab.", "err");
     return;
   }
@@ -165,7 +165,7 @@ async function loadState() {
   // Allowlist: only http(s) pages are refreshable (shared helper).
   const blocked = !isRefreshableUrl(currentTab.url);
   if (blocked) {
-    disableAll("This page can't be auto-refreshed.");
+    disableAll("This page can't be auto-reloaded.");
     return;
   }
 
@@ -175,7 +175,7 @@ async function loadState() {
   try {
     activeTimer = await api.runtime.sendMessage({ type: "getTimer", tabId: currentTab.id });
   } catch (e) {
-    console.warn("Auto Refresh: getTimer failed", e);
+    console.warn("Tab Auto Reload: getTimer failed", e);
     activeTimer = null;
   }
   try {
@@ -184,7 +184,7 @@ async function loadState() {
       ? null
       : await api.runtime.sendMessage({ type: "getCancel", tabId: currentTab.id });
   } catch (e) {
-    console.warn("Auto Refresh: getCancel failed", e);
+    console.warn("Tab Auto Reload: getCancel failed", e);
     cancelInfo = null;
   }
 
@@ -231,7 +231,7 @@ async function save() {
     });
     cancelInfo = null;
   } catch (e) {
-    console.warn("Auto Refresh: startTimer failed", e);
+    console.warn("Tab Auto Reload: startTimer failed", e);
     setStatus(e?.message || "Couldn't start the timer.", "err");
     return;
   } finally {
@@ -254,7 +254,7 @@ async function stop() {
   try {
     await api.runtime.sendMessage({ type: "stopTimer", tabId: currentTab.id });
   } catch (e) {
-    console.warn("Auto Refresh: stopTimer failed", e);
+    console.warn("Tab Auto Reload: stopTimer failed", e);
     // background may have already dropped it — treat as stopped
   }
   activeTimer = null;

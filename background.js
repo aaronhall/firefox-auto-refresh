@@ -1,4 +1,4 @@
-// Per-tab auto-refresh scheduler.
+// Per-tab auto-reload scheduler.
 //
 // Timers belong to a single tabId only — they never leak to other tabs.
 // Scope is purely an auto-cancel guard evaluated on navigation:
@@ -167,7 +167,7 @@ async function startTimer(tabId, seconds, scope) {
 
   const tab = await api.tabs.get(tabId);
   if (!tab?.url || !isRefreshableUrl(tab.url)) {
-    throw new Error("This page can't be auto-refreshed");
+    throw new Error("This page can't be auto-reloaded");
   }
 
   const existing = timers.get(tabId);

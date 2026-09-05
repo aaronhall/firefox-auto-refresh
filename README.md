@@ -1,6 +1,6 @@
-# Auto Refresh — Per-Tab Timer (Firefox)
+# Tab Auto Reload — Per-Tab Timer (Firefox)
 
-Auto-refresh the current tab at a custom interval. Timers belong to a single
+Auto-reload the current tab at a custom interval. Timers belong to a single
 tab only — they never leak into other tabs — and die with the tab. An optional
 scope lock auto-cancels the timer when the tab navigates away.
 

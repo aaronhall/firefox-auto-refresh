@@ -2,6 +2,12 @@
 
 ## Unreleased — review hardening
 
+### Renamed
+- Project renamed to Tab Auto Reload (`firefox-tab-auto-reload`): manifest
+  name/title/description, popup header, README, package metadata, and
+  user-facing strings. Note: `browser_specific_settings.gecko.id` changed
+  too, so Firefox treats this as a distinct extension from older installs.
+
 ### Fixed
 - `manifest.json`: removed `host_permissions: ["<all_urls>"]` (unneeded for
   `tabs.reload`); extension now requests `tabs` only.
