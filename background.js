@@ -17,9 +17,13 @@
 // the tab / browser session — nothing is persisted.
 const api = globalThis.browser ?? globalThis.chrome;
 
-// Upper bound keeps intervals well below the setTimeout 2^31-1 ms
-// overflow (~24.8 days) and avoids accidental reload loops from huge input.
-const MAX_INTERVAL_SECS = 86400; // 24h
+// Shared pure helpers live in utils.js (loaded first via manifest
+// background.scripts). Fall back to node require when running tests.
+const Utils =
+  globalThis.AutoRefreshUtils ??
+  (typeof require === "function" ? require("./utils.js") : null);
+if (!Utils) throw new Error("AutoRefreshUtils not loaded (utils.js missing)");
+const { MAX_INTERVAL_SECS, isRefreshableUrl, pageKeyForUrl, hostForUrl, badgeText } = Utils;
 
 // Auto-cancel notices expire so the map can't grow without bound when the
 // popup is never reopened for a tab.
@@ -37,45 +41,6 @@ const ICON_ACTIVE = { 48: "icons/icon-48.svg", 96: "icons/icon-96.svg" };
 
 function isValidTabId(tabId) {
   return Number.isInteger(tabId) && tabId > 0;
-}
-
-// Allowlist: only http(s) pages can be auto-refreshed. Everything else
-// (about:, moz-extension:, chrome:, view-source:, data:, file:, blob:, …)
-// is rejected. Denylists drift; an allowlist fails closed.
-function isRefreshableUrl(url) {
-  if (!url || typeof url !== "string") return false;
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-// Page identity deliberately ignores the hash so hash-based SPA
-// navigation (and in-page anchors) don't count as leaving the page.
-function pageKeyForUrl(url) {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.href;
-  } catch {
-    return String(url || "").split("#")[0];
-  }
-}
-
-function hostForUrl(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
-  }
-}
-
-function badgeText(seconds) {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 3600)}h`;
 }
 
 function pruneRecentCancels(now = Date.now()) {

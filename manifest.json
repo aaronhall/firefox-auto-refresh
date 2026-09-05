@@ -5,7 +5,7 @@
   "description": "Auto-refresh the current tab at custom intervals, optionally locked to the page or domain.",
   "permissions": ["tabs"],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["utils.js", "background.js"]
   },
   "action": {
     "default_title": "Auto Refresh",

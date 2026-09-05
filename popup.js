@@ -1,4 +1,9 @@
-const api = globalThis.browser ?? chrome;
+const api = globalThis.browser ?? globalThis.chrome;
+
+// Shared helpers (utils.js loads before popup.js in popup.html).
+const Utils = globalThis.AutoRefreshUtils;
+if (!Utils) throw new Error("AutoRefreshUtils not loaded (utils.js missing)");
+const { pageKeyForUrl, hostForUrl, fmtInterval: fmt } = Utils;
 
 const $ = (id) => document.getElementById(id);
 const scopeRadios = [...document.querySelectorAll('input[name="scope"]')];
@@ -17,34 +22,6 @@ let currentHost = "";
 let activeTimer = null; // { seconds, scope, pageKey, host } | null
 let cancelInfo = null; // { scope, seconds, host, pageKey, at } | null (consumed notice)
 
-function pageKeyForUrl(url) {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.href;
-  } catch {
-    return String(url || "").split("#")[0];
-  }
-}
-
-function hostForUrl(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
-  }
-}
-
-function fmt(secs) {
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) {
-    const m = secs / 60;
-    return Number.isInteger(m) ? `${m} min` : `${secs}s`;
-  }
-  const h = secs / 3600;
-  return Number.isInteger(h) ? `${h} hr` : `${Math.round((h + Number.EPSILON) * 100) / 100} hr`;
-}
-
 function selectedScope() {
   return document.querySelector('input[name="scope"]:checked')?.value ?? "tab";
 }
@@ -53,6 +30,17 @@ function setScope(scope) {
   if (!["tab", "page", "domain"].includes(scope)) return;
   const radio = document.querySelector(`input[name="scope"][value="${scope}"]`);
   if (radio) radio.checked = true;
+  syncScopeSelected();
+}
+
+// Fallback for browsers without `:has()` (pre-FF 121): mirror the
+// `:checked` state onto the label as `.selected` so popup.css can style
+// `.scope-option.selected` identically to `.scope-option:has(input:checked)`.
+function syncScopeSelected() {
+  scopeRadios.forEach((r) => {
+    const option = r.closest(".scope-option");
+    if (option) option.classList.toggle("selected", r.checked);
+  });
 }
 
 function setStatus(msg, kind = "") {
@@ -76,6 +64,7 @@ function lockSummary(scope, timer) {
 
 function refreshUI() {
   const scope = selectedScope();
+  syncScopeSelected();
   const label = targetForScope(scope);
   targetLabel.textContent = label || "—";
   targetLabel.title = label || "";
