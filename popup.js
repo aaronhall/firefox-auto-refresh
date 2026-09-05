@@ -3,7 +3,7 @@ const api = globalThis.browser ?? globalThis.chrome;
 // Shared helpers (utils.js loads before popup.js in popup.html).
 const Utils = globalThis.AutoRefreshUtils;
 if (!Utils) throw new Error("AutoRefreshUtils not loaded (utils.js missing)");
-const { pageKeyForUrl, hostForUrl, fmtInterval: fmt } = Utils;
+const { pageKeyForUrl, hostForUrl, fmtInterval: fmt, isRefreshableUrl, MAX_INTERVAL_SECS } = Utils;
 
 const $ = (id) => document.getElementById(id);
 const scopeRadios = [...document.querySelectorAll('input[name="scope"]')];
@@ -21,6 +21,18 @@ let currentPageKey = "";
 let currentHost = "";
 let activeTimer = null; // { seconds, scope, pageKey, host } | null
 let cancelInfo = null; // { scope, seconds, host, pageKey, at } | null (consumed notice)
+let isSaving = false; // guards against double-submit while startTimer is in flight
+
+const REQUIRED_ELS = { targetLabel, intervalInput, saveBtn, stopBtn, statusEl, scopeDescEl, dotEl };
+function domReady() {
+  for (const [name, el] of Object.entries(REQUIRED_ELS)) {
+    if (!el) {
+      console.warn(`Auto Refresh: missing element #${name}`);
+      return false;
+    }
+  }
+  return true;
+}
 
 function selectedScope() {
   return document.querySelector('input[name="scope"]:checked')?.value ?? "tab";
@@ -44,6 +56,10 @@ function syncScopeSelected() {
 }
 
 function setStatus(msg, kind = "") {
+  if (!statusEl) {
+    console.warn("Auto Refresh: status element missing, cannot show:", msg);
+    return;
+  }
   statusEl.textContent = msg;
   statusEl.className = `status ${kind}`;
 }
@@ -63,12 +79,13 @@ function lockSummary(scope, timer) {
 }
 
 function refreshUI() {
+  if (!domReady()) return;
   const scope = selectedScope();
   syncScopeSelected();
   const label = targetForScope(scope);
   targetLabel.textContent = label || "—";
   targetLabel.title = label || "";
-  if (!intervalInput.disabled) saveBtn.disabled = false;
+  if (!intervalInput.disabled && !isSaving) saveBtn.disabled = false;
 
   const cur = Number(intervalInput.value);
   presetBtns.forEach((b) => b.classList.toggle("active", Number(b.dataset.secs) === cur));
@@ -122,6 +139,7 @@ function disableAll(msg) {
 }
 
 async function loadState() {
+  if (!domReady()) return;
   let tabs;
   try {
     tabs = await api.tabs.query({ active: true, currentWindow: true });
@@ -144,9 +162,8 @@ async function loadState() {
     url = null;
   }
 
-  // Allowlist: only http(s) pages are refreshable. This blocks about:,
-  // moz-extension:, chrome:, edge:, view-source:, data:, file:, etc.
-  const blocked = !url || (url.protocol !== "http:" && url.protocol !== "https:");
+  // Allowlist: only http(s) pages are refreshable (shared helper).
+  const blocked = !isRefreshableUrl(currentTab.url);
   if (blocked) {
     disableAll("This page can't be auto-refreshed.");
     return;
@@ -188,6 +205,8 @@ async function loadState() {
 }
 
 async function save() {
+  if (isSaving) return;
+  if (saveBtn?.disabled) return;
   if (!currentTab?.id) return;
   const secs = Math.floor(Number(intervalInput.value));
   if (!Number.isFinite(secs) || secs < 1) {
@@ -195,12 +214,13 @@ async function save() {
     intervalInput.focus();
     return;
   }
-  if (secs > 86400) {
-    setStatus("Enter an interval of at most 24 hours (86400 seconds).", "err");
+  if (secs > MAX_INTERVAL_SECS) {
+    setStatus(`Enter an interval of at most 24 hours (${MAX_INTERVAL_SECS} seconds).`, "err");
     intervalInput.focus();
     return;
   }
   const scope = selectedScope();
+  isSaving = true;
   saveBtn.disabled = true;
   try {
     activeTimer = await api.runtime.sendMessage({
@@ -213,10 +233,11 @@ async function save() {
   } catch (e) {
     console.warn("Auto Refresh: startTimer failed", e);
     setStatus(e?.message || "Couldn't start the timer.", "err");
-    saveBtn.disabled = false;
     return;
+  } finally {
+    isSaving = false;
+    if (!intervalInput.disabled) saveBtn.disabled = false;
   }
-  saveBtn.disabled = false;
   refreshUI();
   setStatus(
     scope === "tab"
@@ -260,7 +281,7 @@ intervalInput.addEventListener("input", () => {
 });
 
 intervalInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") save();
+  if (e.key === "Enter" && !isSaving && !saveBtn.disabled) save();
 });
 
 saveBtn.addEventListener("click", save);
